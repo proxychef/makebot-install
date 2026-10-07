@@ -104,6 +104,48 @@
     }
   }
 
+  # Git Credential Manager keeps a GitHub sign-in in Windows' credential store by default. On the
+  # MS-02 (2026-10-07) that store refused it ("Failed to write item to store. [0x8]"): every pull
+  # signed in through the browser and kept nothing, so the console's own update checks - which
+  # cannot open a browser - always failed. GCM's DPAPI store, a file encrypted to this account that
+  # the console's startup task reads too, has no such limit. It is chosen before the clone or pull
+  # signs in, so that one sign-in is kept; never over a store already chosen, and never for a clone
+  # whose saved sign-in already works.
+  function Test-SavedSignIn([string]$Clone) {
+    $oldPrompt = $env:GIT_TERMINAL_PROMPT
+    $oldGcm = $env:GCM_INTERACTIVE
+    $env:GIT_TERMINAL_PROMPT = '0'
+    $env:GCM_INTERACTIVE = 'never'
+    $ErrorActionPreference = 'Continue'
+    $gitExit = 1
+    try {
+      $null = (& git -C $Clone ls-remote --heads origin 2>&1 | Out-String)
+      $gitExit = $LASTEXITCODE
+    } catch { } finally {
+      $env:GIT_TERMINAL_PROMPT = $oldPrompt
+      $env:GCM_INTERACTIVE = $oldGcm
+    }
+    return ($gitExit -eq 0)
+  }
+
+  function Use-SavedSignIn([string]$Clone) {
+    if ($DryRun) {
+      Write-Skip 'Dry run: would check the saved GitHub sign-in and, unless it works or a store is already chosen, run: git config --global credential.credentialStore dpapi'
+      return
+    }
+    $ErrorActionPreference = 'Continue'
+    $store = ''
+    try { $store = [string](& git config --global --get credential.credentialStore 2>$null) } catch { }
+    if ($store.Trim() -ne '') { return }
+    if ((Test-Path -LiteralPath (Join-Path $Clone '.git')) -and (Test-SavedSignIn $Clone)) { return }
+    & git config --global credential.credentialStore dpapi
+    if ($LASTEXITCODE -eq 0) {
+      Write-Ok 'GitHub sign-ins will be saved in a file encrypted to this account, where the console can read them.'
+    } else {
+      Write-Bad "Git did not accept the sign-in store setting (exit $LASTEXITCODE). Setup checks the sign-in again."
+    }
+  }
+
   # The setup script asks questions (which engine folder, the account sign-in) and prints a
   # checklist. Started with -NoNewWindow it inherits this console, so all of that is seen and
   # answered here; running it with & inside a captured block hid it.
@@ -151,6 +193,7 @@
       Write-Step 3 'The console'
       $MakeBotDir = Join-Path $env:USERPROFILE 'MakeBot'
       $Clone = Join-Path $MakeBotDir 'gui'
+      Use-SavedSignIn $Clone
       if (Test-Path -LiteralPath (Join-Path $Clone '.git')) {
         if ($DryRun) {
           Write-Skip "Dry run: would run: git -C `"$Clone`" pull --ff-only"
