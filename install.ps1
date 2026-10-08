@@ -128,15 +128,23 @@
     return ($gitExit -eq 0)
   }
 
+  # The store chosen for Git Credential Manager, '' when none. Built as "$(...)", never cast with
+  # [string](...): an empty answer cast that way stayed $null in Windows PowerShell 5.1, and the
+  # installer stopped on it at the MS-02 (0.89.4).
+  function Get-CredentialStore {
+    $ErrorActionPreference = 'Continue'
+    $said = ''
+    try { $said = "$(& git config --global --get credential.credentialStore 2>$null)" } catch { }
+    return "$said".Trim()
+  }
+
   function Use-SavedSignIn([string]$Clone) {
     if ($DryRun) {
       Write-Skip 'Dry run: would check the saved GitHub sign-in and, unless it works or a store is already chosen, run: git config --global credential.credentialStore dpapi'
       return
     }
     $ErrorActionPreference = 'Continue'
-    $store = ''
-    try { $store = [string](& git config --global --get credential.credentialStore 2>$null) } catch { }
-    if ($store.Trim() -ne '') { return }
+    if ((Get-CredentialStore) -ne '') { return }
     if ((Test-Path -LiteralPath (Join-Path $Clone '.git')) -and (Test-SavedSignIn $Clone)) { return }
     & git config --global credential.credentialStore dpapi
     if ($LASTEXITCODE -eq 0) {
